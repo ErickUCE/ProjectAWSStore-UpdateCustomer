@@ -6,79 +6,124 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"time"
+	"os"
 
 	"ProjectAWSStore-UpdateCustomer/config"
 	"ProjectAWSStore-UpdateCustomer/models"
 
 	"github.com/gorilla/mux"
 	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
 )
 
-var customerCollection = config.GetCollection("customers")
+// Variable global para la colección de clientes
+var customerCollection *mongo.Collection
 
-// 📌 Actualizar un cliente y sincronizar en `CreateCustomer` y `ReadCustomer`
+// 📌 Función para establecer la colección en el controlador
+func SetCustomerCollection(db *mongo.Database) {
+	customerCollection = db.Collection("customers")
+}
+
+// 📌 **Actualizar un cliente**
 func UpdateCustomer(w http.ResponseWriter, r *http.Request) {
 	params := mux.Vars(r)
-	id, err := primitive.ObjectIDFromHex(params["id"])
-	if err != nil {
-		http.Error(w, "❌ ID inválido", http.StatusBadRequest)
-		return
-	}
+	id := params["id"] // 🔥 Usar ID para la consulta
 
 	var updatedCustomer models.Customer
-	if err := json.NewDecoder(r.Body).Decode(&updatedCustomer); err != nil {
+	err := json.NewDecoder(r.Body).Decode(&updatedCustomer)
+	if err != nil {
 		http.Error(w, "❌ Entrada inválida", http.StatusBadRequest)
 		return
 	}
 
-	updatedCustomer.UpdatedAt = time.Now()
+	fmt.Println("📌 Recibida solicitud de actualización para:", updatedCustomer.Email)
 
+	customerCollection := config.GetDB().Collection("customers")
+	if customerCollection == nil {
+		http.Error(w, "❌ Database not initialized", http.StatusInternalServerError)
+		return
+	}
+
+	// ✅ Actualizar cliente en MongoDB
 	_, err = customerCollection.UpdateOne(
 		context.TODO(),
 		bson.M{"_id": id},
 		bson.M{"$set": updatedCustomer},
 	)
 	if err != nil {
-		http.Error(w, "❌ Error actualizando cliente", http.StatusInternalServerError)
+		http.Error(w, "❌ Error al actualizar cliente", http.StatusInternalServerError)
 		return
 	}
 
-	fmt.Println("✅ Cliente actualizado:", updatedCustomer.Email)
+	fmt.Println("✅ Cliente actualizado correctamente:", updatedCustomer.Email)
 
-	// 🔄 Sincronizar actualización en `CreateCustomer` y `ReadCustomer`
-	go syncUpdateWithOtherServices(updatedCustomer)
+	// 🔥 **Sincronizar con `ReadCustomer` y `CreateCustomer`**
+	syncUpdateWithMicroservices(updatedCustomer)
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(updatedCustomer)
 }
 
-// 📌 Función para sincronizar la actualización con los otros microservicios
-func syncUpdateWithOtherServices(customer models.Customer) {
-	instances := []string{
-		"http://localhost:8081/sync-update", // CreateCustomer
-		"http://localhost:8082/sync-update", // ReadCustomer
+// 📌 **Sincronizar actualización de clientes con `ReadCustomer` y `CreateCustomer`**
+func syncUpdateWithMicroservices(updatedCustomer models.Customer) {
+	services := []string{
+		os.Getenv("READ_CUSTOMER_SERVICE"),
+		os.Getenv("CREATE_CUSTOMER_SERVICE"),
 	}
 
-	jsonData, err := json.Marshal(customer)
+	customerJSON, _ := json.Marshal(updatedCustomer)
+
+	for _, service := range services {
+		url := service + "/sync-update"
+		fmt.Println("🔄 Enviando sincronización a:", url)
+
+		req, err := http.NewRequest("POST", url, bytes.NewBuffer(customerJSON))
+		if err != nil {
+			fmt.Println("❌ Error creando solicitud HTTP:", err)
+			continue
+		}
+
+		req.Header.Set("Content-Type", "application/json")
+		client := &http.Client{}
+		resp, err := client.Do(req)
+		if err != nil {
+			fmt.Println("❌ Error enviando solicitud a", url, ":", err)
+			continue
+		}
+
+		fmt.Println("✅ Sincronización exitosa con:", url, " Status:", resp.Status)
+		resp.Body.Close()
+	}
+}
+
+// 📌 **Sincronizar actualización de clientes desde `ReadCustomer`**
+func SyncUpdateCustomer(w http.ResponseWriter, r *http.Request) {
+	var updatedCustomer models.Customer
+	err := json.NewDecoder(r.Body).Decode(&updatedCustomer)
 	if err != nil {
-		fmt.Println("❌ Error serializando cliente:", err)
+		http.Error(w, "❌ Entrada inválida", http.StatusBadRequest)
 		return
 	}
 
-	for _, instance := range instances {
-		resp, err := http.Post(instance, "application/json", bytes.NewBuffer(jsonData))
-		if err != nil {
-			fmt.Println("❌ Error notificando a", instance, ":", err)
-			continue
-		}
-		defer resp.Body.Close()
+	fmt.Println("📌 Recibida solicitud de sincronización para:", updatedCustomer.Email)
 
-		if resp.StatusCode == http.StatusOK {
-			fmt.Println("✅ Cliente sincronizado con", instance)
-		} else {
-			fmt.Println("⚠️ No se pudo sincronizar cliente con", instance, "Código:", resp.StatusCode)
-		}
+	customerCollection := config.GetDB().Collection("customers")
+	if customerCollection == nil {
+		http.Error(w, "Database not initialized", http.StatusInternalServerError)
+		return
 	}
+
+	// ✅ Actualizar cliente en MongoDB
+	_, err = customerCollection.UpdateOne(
+		context.TODO(),
+		bson.M{"email": updatedCustomer.Email},
+		bson.M{"$set": updatedCustomer},
+	)
+	if err != nil {
+		http.Error(w, "❌ Error al sincronizar actualización", http.StatusInternalServerError)
+		return
+	}
+
+	fmt.Println("✅ Cliente sincronizado correctamente:", updatedCustomer.Email)
+	w.WriteHeader(http.StatusOK)
 }
