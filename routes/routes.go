@@ -17,6 +17,7 @@ func SetupRoutes(db *mongo.Database) *mux.Router {
 	// ✅ Configurar controladores
 	router.HandleFunc("/customers/{id}", controllers.UpdateCustomer).Methods("PUT")
 	router.HandleFunc("/sync-update", controllers.SyncUpdateCustomer).Methods("POST") // 🔥 Usa `SyncUpdateCustomer`
+	router.HandleFunc("/sync-create", controllers.SyncCreateCustomer).Methods("POST")
 
 	return router
 }
