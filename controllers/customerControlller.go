@@ -48,7 +48,7 @@ func UpdateCustomer(w http.ResponseWriter, r *http.Request) {
 
 	customerCollection := config.GetDB().Collection("customers")
 	if customerCollection == nil {
-		http.Error(w, "Database not initialized", http.StatusInternalServerError)
+		http.Error(w, "❌ Database not initialized", http.StatusInternalServerError)
 		return
 	}
 
@@ -69,9 +69,6 @@ func UpdateCustomer(w http.ResponseWriter, r *http.Request) {
 
 	fmt.Println("✅ Cliente actualizado correctamente en UpdateCustomer:", updatedCustomer.Email)
 
-	// ✅ Convertir `ObjectID` a string antes de sincronizar
-	updatedCustomer.ID = objID.Hex() // 🚀 Convertir `ObjectID` a string para sincronización
-
 	// 🔄 **Sincronizar con ReadCustomer y CreateCustomer**
 	go syncUpdateWithMicroservices(updatedCustomer)
 
@@ -85,6 +82,10 @@ func syncUpdateWithMicroservices(updatedCustomer models.Customer) {
 		os.Getenv("READ_CUSTOMER_SERVICE") + "/sync-update",   // URL de ReadCustomer
 		os.Getenv("CREATE_CUSTOMER_SERVICE") + "/sync-update", // URL de CreateCustomer
 	}
+
+	// 🔍 Depuración: Imprimir el cliente antes de enviarlo
+	fmt.Println("🔍 Enviando datos a microservicios:")
+	fmt.Printf("%+v\n", updatedCustomer)
 
 	customerJSON, _ := json.Marshal(updatedCustomer)
 
@@ -120,11 +121,8 @@ func syncUpdateWithMicroservices(updatedCustomer models.Customer) {
 // 📌 **Sincronizar actualización de clientes desde `UpdateCustomer`**
 func SyncUpdateCustomer(w http.ResponseWriter, r *http.Request) {
 	var updatedCustomer models.Customer
-
-	// 📌 Decodificar el JSON recibido
 	err := json.NewDecoder(r.Body).Decode(&updatedCustomer)
 	if err != nil {
-		fmt.Println("❌ Error al decodificar JSON:", err)
 		http.Error(w, "❌ Entrada inválida", http.StatusBadRequest)
 		return
 	}
@@ -137,23 +135,15 @@ func SyncUpdateCustomer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 📌 Verificar si `ID` está presente en el JSON recibido
-	if updatedCustomer.ID == "" || updatedCustomer.ID == "000000000000000000000000" {
-		fmt.Println("⚠️ Error: `ID` vacío en la sincronización de actualización.")
+	// ✅ Convertir `ID` a `ObjectID` antes de buscar en MongoDB
+	if updatedCustomer.ID.IsZero() {
+		fmt.Println("⚠️ ID vacío en la sincronización de actualización.")
 		http.Error(w, "⚠️ Error: `ID` vacío en la sincronización", http.StatusBadRequest)
 		return
 	}
 
-	// ✅ Convertir `ID` de string a `primitive.ObjectID`
-	objID, err := primitive.ObjectIDFromHex(updatedCustomer.ID)
-	if err != nil {
-		fmt.Println("⚠️ ID inválido en sincronización:", updatedCustomer.ID)
-		http.Error(w, "⚠️ ID inválido en sincronización", http.StatusBadRequest)
-		return
-	}
-
-	// ✅ Crear el filtro para buscar por `_id`
-	filter := bson.M{"_id": objID}
+	// 📌 Crear el filtro para buscar por `_id`
+	filter := bson.M{"_id": updatedCustomer.ID}
 	update := bson.M{"$set": updatedCustomer}
 
 	// 📌 Intentar actualizar el cliente en la base de datos
@@ -189,20 +179,31 @@ func SyncCreateCustomer(w http.ResponseWriter, r *http.Request) {
 
 	customerCollection := config.GetDB().Collection("customers")
 	if customerCollection == nil {
-		http.Error(w, "Database not initialized", http.StatusInternalServerError)
+		http.Error(w, "❌ Database not initialized", http.StatusInternalServerError)
 		return
 	}
 
-	// ✅ Verificar si el cliente ya existe en UpdateCustomer
+	// ✅ Convertir ID de `string` a `ObjectID` si es necesario
+	if customer.ID.IsZero() {
+		newID, err := primitive.ObjectIDFromHex(customer.ID.Hex())
+		if err != nil {
+			fmt.Println("⚠️ Error al convertir ID en ObjectID:", err)
+			http.Error(w, "⚠️ ID inválido en sincronización", http.StatusBadRequest)
+			return
+		}
+		customer.ID = newID // 🔥 Asignamos el ObjectID correcto
+	}
+
+	// ✅ Verificar si el cliente ya existe en UpdateCustomerDB
 	var existingCustomer models.Customer
-	err = customerCollection.FindOne(context.TODO(), bson.M{"email": customer.Email}).Decode(&existingCustomer)
+	err = customerCollection.FindOne(context.TODO(), bson.M{"_id": customer.ID}).Decode(&existingCustomer)
 	if err == nil {
 		fmt.Println("⚠️ Cliente ya existe en UpdateCustomer:", customer.Email)
 		w.WriteHeader(http.StatusOK)
 		return
 	}
 
-	// ✅ Insertar nuevo cliente
+	// ✅ Insertar nuevo cliente con `_id` correctamente establecido como `ObjectID`
 	_, err = customerCollection.InsertOne(context.TODO(), customer)
 	if err != nil {
 		http.Error(w, "❌ Error al sincronizar cliente", http.StatusInternalServerError)
