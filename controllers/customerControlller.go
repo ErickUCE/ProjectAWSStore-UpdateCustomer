@@ -29,6 +29,7 @@ func SetCustomerCollection(db *mongo.Database) {
 func UpdateCustomer(w http.ResponseWriter, r *http.Request) {
 	params := mux.Vars(r)
 	id := params["id"]
+	fmt.Println("🔍 ID recibido en la actualización:", id) // <-- Agregar esta línea
 
 	// 🔄 Convertir `ID` de string a `primitive.ObjectID`
 	objID, err := primitive.ObjectIDFromHex(id)
