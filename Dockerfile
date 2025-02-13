@@ -9,7 +9,7 @@ COPY go.mod go.sum ./
 RUN go mod tidy
 
 # Copiar el resto del código fuente de la aplicación
-COPY . .
+COPY . ./
 
 # Establecer las variables de entorno necesarias para la conexión a MongoDB
 ENV MONGO_URI=mongodb://44.217.27.149:27017/UpdateCustomerDB
@@ -21,9 +21,6 @@ ENV DELETE_CUSTOMER_SERVICE=http://localhost:8084
 
 # Exponer el puerto de la aplicación
 EXPOSE 8083
-
-# Copiar el archivo .env al contenedor
-COPY .env .env
 
 # Compilar la aplicación
 RUN go build -o main .
